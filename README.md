@@ -26,7 +26,7 @@ mux.Handle("POST /transfers", verifier.RequireFresh(5*time.Minute)(http.HandlerF
 
 `Require` demands an assurance level (`acr`) and `RequireFresh` demands a recent authentication (`auth_time`, compared in whole seconds), and both verify the token on demand. On Chi or any router built on `net/http`, put `verifier.Authenticate` upstream and use the package-level `auth.Require` and `auth.RequireFresh` behind it, which act on the claims it produced. Read the claims in a handler with `auth.ClaimsFromContext(r.Context())`.
 
-The Passflow documentation has a step-by-step Go tutorial (`docs/tutorials/go-backend.md`) and a runnable API in `examples/resource-server`.
+The Passflow documentation has a step-by-step Go tutorial ([Protect a Go API](https://docs.usepassflow.com/get-started/go-api)) and a runnable API in `examples/resource-server`.
 
 ### Gin
 
