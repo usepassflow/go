@@ -15,7 +15,11 @@ go run . totp <secret>
 |---|---|
 | `seed` | Creates app A (origin `http://localhost:5173`) and app B, both `Offline`, with PKCE on and the 2FA policy `disabled`. Registers one password user on app A and enrols TOTP through `/user/2fa/setup/*`. Prints the app IDs, the user and the TOTP secret, and writes them to `seed.json`. Each run makes new apps and a new user. |
 | `tokens` | Signs in on app A (`aal1.jwt`, `aal1.refresh`), upgrades that session with TOTP on `/auth/refresh` (`aal2.jwt`), and signs in on app B (`wrong-aud.jwt`). Writes the `tokens.json` manifest and prints `T0`, the `auth_time` of `aal2.jwt`. |
-| `totp <secret>` | Prints the current code for a TOTP secret. |
+| `totp <secret>` | Waits for the next TOTP period and prints its code for a TOTP secret. |
+
+Passflow accepts each TOTP code once, so `tokens` and `totp` never send the code of the current
+period, which enrolment or an earlier command may have used. Each waits for the next 30-second
+period to begin, up to 30 seconds, and uses that period's code.
 
 Every sign-in sends the scopes `offline` and `id`. Passflow issues a refresh token and a `sid` only
 when `offline` is requested and the app is `Offline`, and an upgrade needs both.

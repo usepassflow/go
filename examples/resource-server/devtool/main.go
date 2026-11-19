@@ -13,7 +13,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"time"
 )
 
 const (
@@ -151,7 +150,7 @@ func runTokens(args []string) error {
 		return errors.New("sign-in on app A returned no refresh token: is the app Offline, and was the offline scope sent?")
 	}
 
-	code, err := totpCode(state.TOTPSecret, time.Now())
+	code, err := freshTOTPCode(state.TOTPSecret)
 	if err != nil {
 		return err
 	}
@@ -203,7 +202,7 @@ func runTOTP(args []string) error {
 	if len(args) != 1 {
 		return errors.New("usage: devtool totp <secret>")
 	}
-	code, err := totpCode(args[0], time.Now())
+	code, err := freshTOTPCode(args[0])
 	if err != nil {
 		return err
 	}

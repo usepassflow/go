@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"strings"
 	"time"
 )
@@ -218,6 +219,22 @@ func truncate(answer []byte) string {
 		return string(answer[:maxErrorBody]) + "..."
 	}
 	return string(answer)
+}
+
+// freshTOTPCode waits for the next TOTP period to begin, then returns its code. Passflow accepts
+// each period's code once. Every code devtool sent before, at enrolment or in an earlier command,
+// is from a period that has already begun, so a code from the next period is always unused.
+func freshTOTPCode(secret string) (string, error) {
+	wait := untilNextPeriod(time.Now())
+	fmt.Fprintf(os.Stderr, "waiting %s for the next TOTP period\n", wait.Round(time.Second))
+	time.Sleep(wait)
+	return totpCode(secret, time.Now())
+}
+
+// untilNextPeriod is how long after now the next TOTP period begins.
+func untilNextPeriod(now time.Time) time.Duration {
+	period := int64(totpPeriodSeconds * time.Second)
+	return time.Duration(period - now.UnixNano()%period)
 }
 
 // totpCode is RFC 6238 with the parameters Passflow uses: HMAC-SHA1, 30 seconds, 6 digits.
