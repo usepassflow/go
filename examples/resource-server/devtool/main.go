@@ -23,9 +23,13 @@ const (
 
 	seedFile     = "seed.json"
 	manifestFile = "tokens.json"
+
+	totpUsage = "usage: devtool totp [--algorithm SHA1] [--digits 6] [--period 30] <secret>"
 )
 
-// seedState is what `seed` leaves for `tokens` and for the person running the browser check.
+// seedState is what `seed` leaves for `tokens` and for the person running the browser check. The
+// TOTP settings are the ones the server enrolled the secret with; a seed without them has the
+// RFC 6238 defaults.
 type seedState struct {
 	Server     string `json:"server"`
 	AppA       string `json:"app_a"`
@@ -33,6 +37,7 @@ type seedState struct {
 	Email      string `json:"email"`
 	Password   string `json:"password"`
 	TOTPSecret string `json:"totp_secret"`
+	totpParams
 }
 
 // manifestEntry describes one token file. scripts/api-check.sh reads these fields.
@@ -53,7 +58,7 @@ func main() {
 
 func run(args []string) error {
 	if len(args) == 0 {
-		return errors.New("usage: devtool seed|tokens|totp <secret>")
+		return errors.New("usage: devtool seed|tokens|totp [flags] <secret>")
 	}
 	command, rest := args[0], args[1:]
 	switch command {
@@ -104,7 +109,7 @@ func runSeed(args []string) error {
 	if err != nil {
 		return fmt.Errorf("register the user: %w", err)
 	}
-	state.TOTPSecret, err = api.enrolTOTP(state.AppA, session.Access)
+	state.TOTPSecret, state.totpParams, err = api.enrolTOTP(state.AppA, session.Access)
 	if err != nil {
 		return fmt.Errorf("enrol TOTP: %w", err)
 	}
@@ -117,6 +122,7 @@ func runSeed(args []string) error {
 	fmt.Printf("user: %s\n", state.Email)
 	fmt.Printf("password: %s\n", state.Password)
 	fmt.Printf("TOTP secret: %s\n", state.TOTPSecret)
+	fmt.Printf("TOTP settings: %s, %d digits, %d s\n", state.Algorithm, state.Digits, state.Period)
 	fmt.Printf("wrote %s\n", filepath.Join(*out, seedFile))
 	return nil
 }
@@ -150,7 +156,7 @@ func runTokens(args []string) error {
 		return errors.New("sign-in on app A returned no refresh token: is the app Offline, and was the offline scope sent?")
 	}
 
-	code, err := freshTOTPCode(state.TOTPSecret)
+	code, err := freshTOTPCode(state.TOTPSecret, state.totpParams)
 	if err != nil {
 		return err
 	}
@@ -199,10 +205,19 @@ func runTokens(args []string) error {
 }
 
 func runTOTP(args []string) error {
-	if len(args) != 1 {
-		return errors.New("usage: devtool totp <secret>")
+	flags := flag.NewFlagSet("totp", flag.ContinueOnError)
+	var params totpParams
+	flags.StringVar(&params.Algorithm, "algorithm", defaultTOTPAlgorithm, "HMAC hash: SHA1, SHA256 or SHA512")
+	flags.IntVar(&params.Digits, "digits", defaultTOTPDigits, "code length: 6 to 8")
+	flags.IntVar(&params.Period, "period", defaultTOTPPeriod, "seconds per code")
+	if err := flags.Parse(args); err != nil {
+		return err
 	}
-	code, err := freshTOTPCode(args[0])
+	if flags.NArg() != 1 {
+		return errors.New(totpUsage)
+	}
+	params.Algorithm = strings.ToUpper(params.Algorithm)
+	code, err := freshTOTPCode(flags.Arg(0), params)
 	if err != nil {
 		return err
 	}

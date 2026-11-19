@@ -4,17 +4,21 @@ import (
 	"bytes"
 	"crypto/hmac"
 	"crypto/rand"
-	"crypto/sha1" //nolint:gosec // RFC 6238 TOTP uses HMAC-SHA1, as Passflow does.
+	"crypto/sha1" //nolint:gosec // RFC 6238 TOTP defaults to HMAC-SHA1, and Passflow offers it.
 	"crypto/sha256"
+	"crypto/sha512"
 	"encoding/base32"
 	"encoding/base64"
 	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"hash"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -23,8 +27,10 @@ const (
 	headerClientID = "X-Passflow-ClientID"
 	headerKey      = "X-Passflow-Key"
 
-	totpPeriodSeconds = 30
-	totpModulus       = 1_000_000
+	// The RFC 6238 defaults, for a server that does not say which TOTP settings it uses.
+	defaultTOTPAlgorithm = "SHA1"
+	defaultTOTPDigits    = 6
+	defaultTOTPPeriod    = 30
 
 	maxErrorBody = 500
 
@@ -143,30 +149,124 @@ func newPKCEPair() (verifier, challenge string, err error) {
 	return verifier, base64.RawURLEncoding.EncodeToString(sum[:]), nil
 }
 
+// totpParams are the settings an enrolment's codes are computed with. A zero field is the RFC 6238
+// default: HMAC-SHA1, 6 digits, 30 seconds.
+type totpParams struct {
+	Algorithm string `json:"totp_algorithm,omitempty"`
+	Digits    int    `json:"totp_digits,omitempty"`
+	Period    int    `json:"totp_period,omitempty"`
+}
+
+// withDefaults fills the zero fields with the RFC 6238 defaults.
+func (p totpParams) withDefaults() totpParams {
+	if p.Algorithm == "" {
+		p.Algorithm = defaultTOTPAlgorithm
+	}
+	if p.Digits == 0 {
+		p.Digits = defaultTOTPDigits
+	}
+	if p.Period == 0 {
+		p.Period = defaultTOTPPeriod
+	}
+	return p
+}
+
+// check refuses settings devtool cannot compute codes with, and returns the hash of the HMAC.
+func (p totpParams) check() (func() hash.Hash, error) {
+	if p.Digits < 6 || p.Digits > 8 {
+		return nil, fmt.Errorf("TOTP digits %d: devtool supports 6 to 8", p.Digits)
+	}
+	if p.Period <= 0 {
+		return nil, fmt.Errorf("TOTP period %d: it must be positive", p.Period)
+	}
+	switch p.Algorithm {
+	case "SHA1":
+		return sha1.New, nil
+	case "SHA256":
+		return sha256.New, nil
+	case "SHA512":
+		return sha512.New, nil
+	}
+	return nil, fmt.Errorf("TOTP algorithm %q: devtool supports SHA1, SHA256 and SHA512", p.Algorithm)
+}
+
+// totpSetup is what /user/2fa/setup/begin returns. The otpauth:// URI names the algorithm, the
+// digits and the period; totp_digits and totp_period repeat the last two.
+type totpSetup struct {
+	Secret     string `json:"secret"`
+	QRCodeURL  string `json:"qr_code_url"`
+	TOTPDigits int    `json:"totp_digits"`
+	TOTPPeriod int    `json:"totp_period"`
+}
+
+// params are the settings of the enrolment this setup started: the fields first, then the
+// otpauth:// URI, then the RFC 6238 defaults.
+func (s totpSetup) params() (totpParams, error) {
+	var p totpParams
+	if s.QRCodeURL != "" {
+		uri, err := url.Parse(s.QRCodeURL)
+		if err != nil {
+			return p, errors.New("the otpauth URI does not parse")
+		}
+		query := uri.Query()
+		p.Algorithm = strings.ToUpper(query.Get("algorithm"))
+		if p.Digits, err = uriNumber(query, "digits"); err != nil {
+			return p, err
+		}
+		if p.Period, err = uriNumber(query, "period"); err != nil {
+			return p, err
+		}
+	}
+	if s.TOTPDigits != 0 {
+		p.Digits = s.TOTPDigits
+	}
+	if s.TOTPPeriod != 0 {
+		p.Period = s.TOTPPeriod
+	}
+	p = p.withDefaults()
+	_, err := p.check()
+	return p, err
+}
+
+// uriNumber reads a whole-number parameter of an otpauth:// URI, 0 when it is absent.
+func uriNumber(query url.Values, name string) (int, error) {
+	value := query.Get(name)
+	if value == "" {
+		return 0, nil
+	}
+	number, err := strconv.Atoi(value)
+	if err != nil {
+		return 0, fmt.Errorf("the otpauth URI has %s=%q, not a number", name, value)
+	}
+	return number, nil
+}
+
 // enrolTOTP enrols TOTP through the v1 setup endpoints, which take no app policy, and returns the
-// secret.
-func (a *api) enrolTOTP(appID, accessToken string) (string, error) {
+// secret and the settings the server enrolled it with.
+func (a *api) enrolTOTP(appID, accessToken string) (string, totpParams, error) {
 	headers := map[string]string{
 		headerClientID:  appID,
 		"Authorization": "Bearer " + accessToken,
 	}
-	var setup struct {
-		Secret string `json:"secret"`
-	}
+	var setup totpSetup
 	if err := a.post("/user/2fa/setup/begin", headers, "", &setup); err != nil {
-		return "", err
+		return "", totpParams{}, err
 	}
 	if setup.Secret == "" {
-		return "", errors.New("the response had no TOTP secret")
+		return "", totpParams{}, errors.New("the response had no TOTP secret")
 	}
-	code, err := totpCode(setup.Secret, time.Now())
+	params, err := setup.params()
 	if err != nil {
-		return "", err
+		return "", totpParams{}, err
+	}
+	code, err := totpCode(setup.Secret, params, time.Now())
+	if err != nil {
+		return "", totpParams{}, err
 	}
 	if err := a.post("/user/2fa/setup/confirm", headers, fmt.Sprintf(confirmTemplate, code), nil); err != nil {
-		return "", err
+		return "", totpParams{}, err
 	}
-	return setup.Secret, nil
+	return setup.Secret, params, nil
 }
 
 func (a *api) upgradeWithTOTP(appID, refreshToken, code string) (tokenPair, error) {
@@ -224,33 +324,46 @@ func truncate(answer []byte) string {
 // freshTOTPCode waits for the next TOTP period to begin, then returns its code. Passflow accepts
 // each period's code once. Every code devtool sent before, at enrolment or in an earlier command,
 // is from a period that has already begun, so a code from the next period is always unused.
-func freshTOTPCode(secret string) (string, error) {
-	wait := untilNextPeriod(time.Now())
+func freshTOTPCode(secret string, params totpParams) (string, error) {
+	params = params.withDefaults()
+	if _, err := params.check(); err != nil {
+		return "", err
+	}
+	wait := untilNextPeriod(time.Now(), params.Period)
 	fmt.Fprintf(os.Stderr, "waiting %s for the next TOTP period\n", wait.Round(time.Second))
 	time.Sleep(wait)
-	return totpCode(secret, time.Now())
+	return totpCode(secret, params, time.Now())
 }
 
-// untilNextPeriod is how long after now the next TOTP period begins.
-func untilNextPeriod(now time.Time) time.Duration {
-	period := int64(totpPeriodSeconds * time.Second)
+// untilNextPeriod is how long after now the next TOTP period of periodSeconds begins.
+func untilNextPeriod(now time.Time, periodSeconds int) time.Duration {
+	period := int64(periodSeconds) * int64(time.Second)
 	return time.Duration(period - now.UnixNano()%period)
 }
 
-// totpCode is RFC 6238 with the parameters Passflow uses: HMAC-SHA1, 30 seconds, 6 digits.
-func totpCode(secret string, now time.Time) (string, error) {
+// totpCode is RFC 6238 with the given settings, and the RFC 6238 defaults for the zero ones.
+func totpCode(secret string, params totpParams, now time.Time) (string, error) {
+	params = params.withDefaults()
+	newHash, err := params.check()
+	if err != nil {
+		return "", err
+	}
 	normalized := strings.ToUpper(strings.TrimRight(strings.TrimSpace(secret), "="))
 	key, err := base32.StdEncoding.WithPadding(base32.NoPadding).DecodeString(normalized)
 	if err != nil {
 		return "", errors.New("the TOTP secret is not base32")
 	}
 	var counter [8]byte
-	binary.BigEndian.PutUint64(counter[:], uint64(now.Unix())/totpPeriodSeconds)
+	binary.BigEndian.PutUint64(counter[:], uint64(now.Unix())/uint64(params.Period))
 
-	mac := hmac.New(sha1.New, key)
+	mac := hmac.New(newHash, key)
 	mac.Write(counter[:])
 	sum := mac.Sum(nil)
 	offset := sum[len(sum)-1] & 0x0f
 	value := binary.BigEndian.Uint32(sum[offset:offset+4]) & 0x7fffffff
-	return fmt.Sprintf("%06d", value%totpModulus), nil
+	modulus := uint32(1)
+	for range params.Digits {
+		modulus *= 10
+	}
+	return fmt.Sprintf("%0*d", params.Digits, value%modulus), nil
 }
