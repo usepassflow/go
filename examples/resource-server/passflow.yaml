@@ -16,7 +16,7 @@ general:
   unique_id_fields:
     - phone
     - email
-    - nickname
+    - username
 
 # Used by `devtool seed` to create the two applications.
 management_keys:
