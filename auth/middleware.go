@@ -61,7 +61,7 @@ func acrCheck(min ACR) check {
 		if c.ACR.Satisfies(min) {
 			return true
 		}
-		challenge.Write(w)
+		writeStepUp(w, c, challenge)
 		return false
 	}
 }
@@ -78,9 +78,18 @@ func freshnessCheck(maxAge time.Duration) check {
 		if !c.AuthTime.IsZero() && !staleSince(c, limit) {
 			return true
 		}
-		challenge.Write(w)
+		writeStepUp(w, c, challenge)
 		return false
 	}
+}
+
+// writeStepUp names the resource metadata when a protected resource verified the claims.
+func writeStepUp(w http.ResponseWriter, c *Claims, challenge Challenge) {
+	var resource *resourceChallenge
+	if c.verifiedBy != nil {
+		resource = c.verifiedBy.resource
+	}
+	writeRejection(w, http.StatusUnauthorized, resource.stepUp(challenge.String()))
 }
 
 // staleSince compares whole seconds, as auth_time and the Node library do: an age of 300.5 s is 300.
@@ -129,7 +138,7 @@ func (v *Verifier) onDemand(passes check) func(http.Handler) http.Handler {
 func (v *Verifier) authenticate(w http.ResponseWriter, r *http.Request) (*http.Request, *Claims, bool) {
 	token, err := BearerToken(r)
 	if err != nil {
-		writeRejection(w, http.StatusUnauthorized, challengeMissingToken)
+		writeRejection(w, http.StatusUnauthorized, v.resource.unauthorized(challengeMissingToken))
 		return nil, nil, false
 	}
 	claims, err := v.Verify(r.Context(), token)
@@ -137,7 +146,7 @@ func (v *Verifier) authenticate(w http.ResponseWriter, r *http.Request) (*http.R
 		if errors.Is(err, ErrKeySetUnavailable) {
 			writeRejection(w, http.StatusServiceUnavailable, "")
 		} else {
-			writeRejection(w, http.StatusUnauthorized, challengeInvalidToken)
+			writeRejection(w, http.StatusUnauthorized, v.resource.unauthorized(challengeInvalidToken))
 		}
 		return nil, nil, false
 	}

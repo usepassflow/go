@@ -3,6 +3,7 @@ package auth
 import (
 	"context"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
@@ -13,6 +14,8 @@ const (
 	claimACR      = "acr"
 	claimAMR      = "amr"
 	claimAuthTime = "auth_time"
+	claimClientID = "client_id"
+	claimScope    = "scope"
 	claimScopes   = "scopes"
 	claimSession  = "sid"
 	claimTenants  = "passflow_tm"
@@ -38,8 +41,14 @@ type TenantMembership struct {
 // Claims is what a verified token says about its subject.
 type Claims struct {
 	Subject, Issuer, Type, SessionID string
-	Audience, AMR, Scopes            []string
-	ExpiresAt, IssuedAt              time.Time
+	// ClientID is the client the token was issued to. It is empty when client_id is absent.
+	ClientID string
+	Audience []string
+	AMR      []string
+	// Scopes holds the space-separated scope claim, or the scopes array of a token without a scope
+	// claim. A scope claim that is not a string means no scopes.
+	Scopes              []string
+	ExpiresAt, IssuedAt time.Time
 	// AuthTime is the zero time when auth_time is absent or not a number.
 	AuthTime time.Time
 	// ACR is ACRNone when acr is absent or not a string.
@@ -81,6 +90,20 @@ func (c *Claims) HasRole(tenantID, role string) bool {
 	return slices.Contains(c.Roles(tenantID), role)
 }
 
+// HasScopes reports whether the token carries every one of the scopes. A scope is what the user
+// delegated to the client, not what the user may do.
+func (c *Claims) HasScopes(scopes ...string) bool {
+	if c == nil {
+		return false
+	}
+	for _, scope := range scopes {
+		if !slices.Contains(c.Scopes, scope) {
+			return false
+		}
+	}
+	return true
+}
+
 // VerifiedBy reports whether these are the exact claims v's Verify returned. It is false for a
 // struct copy, for hand-built claims and for claims from any other verifier, even one configured
 // identically.
@@ -108,8 +131,9 @@ func newClaims(raw jwt.MapClaims) *Claims {
 		Issuer:    stringClaim(raw, "iss"),
 		Type:      stringClaim(raw, claimType),
 		SessionID: stringClaim(raw, claimSession),
+		ClientID:  stringClaim(raw, claimClientID),
 		AMR:       stringsClaim(raw[claimAMR]),
-		Scopes:    stringsClaim(raw[claimScopes]),
+		Scopes:    scopesClaim(raw),
 		ExpiresAt: numericDate(raw["exp"]),
 		IssuedAt:  numericDate(raw["iat"]),
 		AuthTime:  numericDate(raw[claimAuthTime]),
@@ -129,6 +153,15 @@ func newClaims(raw jwt.MapClaims) *Claims {
 func stringClaim(raw jwt.MapClaims, name string) string {
 	s, _ := raw[name].(string)
 	return s
+}
+
+func scopesClaim(raw jwt.MapClaims) []string {
+	scope, present := raw[claimScope]
+	if !present {
+		return stringsClaim(raw[claimScopes])
+	}
+	s, _ := scope.(string)
+	return strings.FieldsFunc(s, func(r rune) bool { return r == ' ' })
 }
 
 // stringsClaim reads a JSON array of strings, keeping only the strings.

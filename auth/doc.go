@@ -19,6 +19,10 @@
 //
 //	protected := verifier.Authenticate(auth.Require(auth.AAL2)(handler))
 //
+// [NewProtectedResource] makes the API an OAuth protected resource, such as an MCP server: it serves
+// RFC 9728 metadata, its 401 and 403 challenges name that metadata, and RequireScopes checks the
+// scopes of a token.
+//
 // A browser on another origin can read the challenge only if the response exposes the header, so
 // add [CORSExposedHeaders] to the CORS configuration. Without it the SDK sees a bare 401.
 //

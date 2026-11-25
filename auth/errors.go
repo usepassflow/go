@@ -32,6 +32,7 @@ const (
 	ReasonKIDMissing  Reason = "kid_missing"
 	ReasonKeyUnknown  Reason = "key_unknown"
 	ReasonCrit        Reason = "crit"
+	ReasonTyp         Reason = "typ"
 	ReasonMalformed   Reason = "malformed"
 )
 

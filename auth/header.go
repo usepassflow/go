@@ -20,8 +20,8 @@ type tokenHeader struct {
 }
 
 // inspectHeader applies the header rules on the raw token, before any key lookup. The order is
-// shared with @passflow/node: malformed, then alg, then crit, then kid. The JWT library would decide
-// the algorithm only after parsing, and the two languages would then disagree on the reason.
+// shared with @passflow/node: malformed, then alg, then crit, then typ, then kid. The JWT library would
+// decide the algorithm only after parsing, and the two languages would then disagree on the reason.
 //
 // The header decodes into a map because encoding/json matches struct fields case-insensitively,
 // so a struct would read "ALG" as "alg" where the JOSE header names are case-sensitive.
@@ -57,9 +57,20 @@ func inspectHeader(token string) (tokenHeader, error) {
 		return tokenHeader{}, rejection(ReasonCrit)
 	}
 
+	if typ, present := header["typ"]; present && !isAccessTokenTyp(typ) {
+		return tokenHeader{}, rejection(ReasonTyp)
+	}
+
 	kid, _ := header["kid"].(string)
 	if kid == "" {
 		return tokenHeader{}, rejection(ReasonKIDMissing)
 	}
 	return tokenHeader{alg: alg, kid: kid, kind: kind}, nil
+}
+
+// isAccessTokenTyp accepts the generic JWT media type and the access token one of RFC 9068. Media
+// type names are case-insensitive.
+func isAccessTokenTyp(typ any) bool {
+	s, _ := typ.(string)
+	return strings.EqualFold(s, "JWT") || strings.EqualFold(s, "at+jwt") || strings.EqualFold(s, "application/at+jwt")
 }

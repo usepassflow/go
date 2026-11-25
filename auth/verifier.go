@@ -55,6 +55,8 @@ type Verifier struct {
 	now        func() time.Time
 	parser     *jwt.Parser
 	keys       *keySet
+	// resource adds its parameters to the challenges of a protected resource. It is nil otherwise.
+	resource *resourceChallenge
 
 	// verifyHook is called once at the top of every Verify. It is nil in production: tests set it
 	// to count verifications.

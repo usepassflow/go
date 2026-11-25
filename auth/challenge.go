@@ -13,6 +13,7 @@ const (
 
 	challengeMissingToken = "Bearer"
 	challengeInvalidToken = `Bearer error="invalid_token"`
+	challengeScope        = `Bearer error="insufficient_scope"`
 	challengeStepUp       = `Bearer error="insufficient_user_authentication"`
 )
 

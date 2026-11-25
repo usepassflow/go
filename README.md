@@ -41,6 +41,38 @@ protected := router.Group("/", authgin.Authenticate(verifier))
 protected.GET("/invoices", authgin.Require(auth.AAL2), invoices)
 ```
 
+### Protect an MCP server
+
+`NewProtectedResource` makes the API an OAuth protected resource (RFC 9728). The resource URL is the only audience, so leave `Config.Audiences` empty. Register the same URL, with its scopes, under `oidc.resources` in Passflow. The token's `aud` carries the URL exactly as it is registered and the SDK compares it byte for byte, so `Resource` must match the registered URI to the byte: `https://mcp.example.com/mcp/` with a trailing `/` is another resource, and its tokens get 401.
+
+```go
+resource, err := auth.NewProtectedResource(
+	auth.Config{Issuer: "https://auth.example.com"},
+	auth.ProtectedResourceConfig{
+		Resource: "https://mcp.example.com/mcp",
+		Scopes:   []string{"mcp"}, // what a client needs to start
+		Name:     "Notes",
+	},
+)
+if err != nil {
+	log.Fatal(err)
+}
+
+mux.Handle(resource.MetadataPath(), resource.MetadataHandler())
+mux.Handle("/mcp", resource.RequireScopes("mcp")(mcpHandler))
+```
+
+`RequireScopes` authenticates on demand. A scope is what the user delegated to the client, not what the user may do, so check the user's own permissions in the handler. `Claims.HasScopes` checks a scope there, and `Claims.ClientID` is the client the token was issued to. `auth.Require` and `auth.RequireFresh` work behind `resource.Authenticate`.
+
+| Situation | Status | `WWW-Authenticate` |
+|---|---|---|
+| No token | 401 | `Bearer scope="mcp", resource_metadata="https://mcp.example.com/.well-known/oauth-protected-resource/mcp"` |
+| Invalid token | 401 | `Bearer error="invalid_token", scope="mcp", resource_metadata="…"` |
+| Missing scope | 403 | `Bearer error="insufficient_scope", scope="mcp notes:write", resource_metadata="…"` |
+| Step-up | 401 | the step-up challenge below, then `, resource_metadata="…"` |
+
+The 403 lists every scope the route requires.
+
 ## Responses and CORS
 
 | Situation | Status | `WWW-Authenticate` |
