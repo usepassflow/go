@@ -5,7 +5,7 @@ go 1.27.0
 require (
 	github.com/gin-gonic/gin v1.12.0
 	github.com/golang-jwt/jwt/v5 v5.3.1
-	github.com/usepassflow/go v0.2.0
+	github.com/usepassflow/go v0.3.0
 )
 
 require (
